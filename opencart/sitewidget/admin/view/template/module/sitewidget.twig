@@ -1,0 +1,61 @@
+{{ header }}{{ column_left }}
+<div id="content">
+  <div class="page-header">
+    <div class="container-fluid">
+      <div class="float-end">
+        <button type="submit" form="form-sitewidget" data-bs-toggle="tooltip" title="{{ button_save }}" class="btn btn-primary">
+          <i class="fa-solid fa-save"></i>
+        </button>
+        <a href="{{ back }}" data-bs-toggle="tooltip" title="{{ button_back }}" class="btn btn-light">
+          <i class="fa-solid fa-reply"></i>
+        </a>
+      </div>
+      <h1>{{ heading_title }}</h1>
+      <ol class="breadcrumb">
+        {% for breadcrumb in breadcrumbs %}
+          <li class="breadcrumb-item"><a href="{{ breadcrumb.href }}">{{ breadcrumb.text }}</a></li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+
+  <div class="container-fluid">
+    <div class="card">
+      <div class="card-header"><i class="fa-solid fa-pencil"></i> {{ text_edit }}</div>
+      <div class="card-body">
+        <form id="form-sitewidget" action="{{ save }}" method="post" data-oc-toggle="ajax">
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label" for="input-status">{{ entry_status }}</label>
+            <div class="col-sm-10">
+              <select name="module_sitewidget_status" id="input-status" class="form-select">
+                <option value="1"{% if module_sitewidget_status %} selected{% endif %}>{{ text_enabled }}</option>
+                <option value="0"{% if not module_sitewidget_status %} selected{% endif %}>{{ text_disabled }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label" for="input-public-key">{{ entry_public_key }}</label>
+            <div class="col-sm-10">
+              <input type="number" min="1" name="module_sitewidget_public_key" value="{{ module_sitewidget_public_key }}" id="input-public-key" class="form-control">
+              <div class="form-text">{{ help_public_key }}</div>
+            </div>
+          </div>
+
+          {% for field, label in sitewidget_switches %}
+            <div class="row mb-3">
+              <label class="col-sm-2 col-form-label">{{ label }}</label>
+              <div class="col-sm-10">
+                <div class="form-check form-switch form-switch-lg">
+                  <input type="hidden" name="{{ field }}" value="0">
+                  <input type="checkbox" name="{{ field }}" value="1" class="form-check-input"{% if _context[field] %} checked{% endif %}>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{{ footer }}

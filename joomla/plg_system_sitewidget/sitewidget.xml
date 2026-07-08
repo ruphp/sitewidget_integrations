@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extension type="plugin" group="system" method="upgrade">
+    <name>plg_system_sitewidget</name>
+    <author>SiteWidget</author>
+    <creationDate>2026-07</creationDate>
+    <copyright>SiteWidget</copyright>
+    <license>GPL-2.0-or-later</license>
+    <authorEmail>sitewidget@ya.ru</authorEmail>
+    <authorUrl>https://sitewidget.ru</authorUrl>
+    <version>0.1.0</version>
+    <description>SiteWidget assistant integration.</description>
+    <namespace path="src">SiteWidget\Plugin\System\SiteWidget</namespace>
+    <files>
+        <folder plugin="sitewidget">services</folder>
+        <folder>src</folder>
+    </files>
+    <config>
+        <fields name="params">
+            <fieldset name="basic">
+                <field
+                    name="public_key"
+                    type="number"
+                    label="Public key"
+                    description="Public key клиента из панели SiteWidget."
+                    min="1"
+                    default="0"
+                />
+                <field
+                    name="send_user_id"
+                    type="radio"
+                    label="Передавать ID пользователя"
+                    default="1"
+                    layout="joomla.form.field.radio.switcher">
+                    <option value="0">JNO</option>
+                    <option value="1">JYES</option>
+                </field>
+                <field
+                    name="send_roles"
+                    type="radio"
+                    label="Передавать ID групп пользователя"
+                    default="1"
+                    layout="joomla.form.field.radio.switcher">
+                    <option value="0">JNO</option>
+                    <option value="1">JYES</option>
+                </field>
+                <field
+                    name="send_email"
+                    type="radio"
+                    label="Передавать email"
+                    default="1"
+                    layout="joomla.form.field.radio.switcher">
+                    <option value="0">JNO</option>
+                    <option value="1">JYES</option>
+                </field>
+                <field
+                    name="send_name"
+                    type="radio"
+                    label="Передавать имя"
+                    default="1"
+                    layout="joomla.form.field.radio.switcher">
+                    <option value="0">JNO</option>
+                    <option value="1">JYES</option>
+                </field>
+            </fieldset>
+        </fields>
+    </config>
+</extension>
