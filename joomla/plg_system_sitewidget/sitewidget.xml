@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<extension type="plugin" group="system" method="upgrade">
+<extension type="plugin" version="4.0" group="system" method="upgrade">
     <name>plg_system_sitewidget</name>
     <author>SiteWidget</author>
     <creationDate>2026-07</creationDate>
@@ -11,8 +11,8 @@
     <description>SiteWidget assistant integration.</description>
     <namespace path="src">SiteWidget\Plugin\System\SiteWidget</namespace>
     <files>
-        <folder plugin="sitewidget">services</folder>
-        <folder>src</folder>
+        <folder>services</folder>
+        <folder plugin="sitewidget">src</folder>
     </files>
     <config>
         <fields name="params">
