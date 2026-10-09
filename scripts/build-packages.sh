@@ -20,7 +20,7 @@ copy_clean() {
 
 copy_clean
 cp -R "$ROOT/wordpress/sitewidget" "$TMP/sitewidget"
-python3 - "$TMP" "$DIST/sitewidget-wordpress-0.1.0.zip" <<'PY'
+python3 - "$TMP" "$DIST/sitewidget-wordpress-0.2.0.zip" <<'PY'
 import os
 import sys
 import zipfile
@@ -35,7 +35,7 @@ PY
 
 copy_clean
 cp -R "$ROOT/joomla/plg_system_sitewidget/"* "$TMP/"
-python3 - "$TMP" "$DIST/sitewidget-joomla-system-0.1.0.zip" <<'PY'
+python3 - "$TMP" "$DIST/sitewidget-joomla-system-0.2.0.zip" <<'PY'
 import os
 import sys
 import zipfile
@@ -53,7 +53,7 @@ mkdir -p "$TMP/upload/extension/sitewidget"
 cp "$ROOT/opencart/sitewidget/install.json" "$TMP/install.json"
 cp -R "$ROOT/opencart/sitewidget/admin" "$TMP/upload/extension/sitewidget/admin"
 cp -R "$ROOT/opencart/sitewidget/catalog" "$TMP/upload/extension/sitewidget/catalog"
-python3 - "$TMP" "$DIST/sitewidget-opencart-0.1.0.ocmod.zip" <<'PY'
+python3 - "$TMP" "$DIST/sitewidget-opencart-0.2.0.ocmod.zip" <<'PY'
 import os
 import sys
 import zipfile

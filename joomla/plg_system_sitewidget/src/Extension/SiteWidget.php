@@ -4,6 +4,7 @@ namespace SiteWidget\Plugin\System\SiteWidget\Extension;
 
 use Joomla\CMS\Application\CMSApplicationInterface;
 use Joomla\CMS\Factory;
+use Joomla\CMS\Http\HttpFactory;
 use Joomla\CMS\Plugin\CMSPlugin;
 use Joomla\Event\SubscriberInterface;
 
@@ -61,6 +62,106 @@ JS;
         Factory::getDocument()->addScriptDeclaration($script);
     }
 
+    public function queueSmsCode(string $requestId, string $phone, string $text, ?\DateTimeInterface $expiresAt = null): array
+    {
+        $token = trim((string)$this->params->get('sms_api_token', ''));
+        if ($token === '') {
+            throw new \RuntimeException('SMS API-токен SiteWidget не настроен');
+        }
+
+        $payload = json_encode([
+            'requestId' => $requestId,
+            'phone' => $phone,
+            'text' => $text,
+            'expiresAt' => ($expiresAt ?? new \DateTimeImmutable('+5 minutes'))->format(DATE_ATOM),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $response = HttpFactory::getHttp()->post(
+            'https://sitewidget.ru/api/sms/v1/tasks',
+            $payload,
+            [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ],
+            5,
+        );
+        $data = json_decode((string)$response->body, true);
+        if ((int)$response->code < 200 || (int)$response->code >= 300 || !is_array($data)) {
+            throw new \RuntimeException(is_array($data)
+                ? (string)($data['message'] ?? 'SiteWidget не принял SMS-задание')
+                : 'SiteWidget вернул некорректный ответ');
+        }
+
+        return $data;
+    }
+
+    public function requestSmsCode(string $phone): array
+    {
+        $phone = $this->normalizePhone($phone);
+        if ($phone === null) {
+            throw new \InvalidArgumentException('Некорректный номер телефона');
+        }
+
+        $requestId = bin2hex(random_bytes(16));
+        $code = (string)random_int(1000, 9999);
+        $session = Factory::getApplication()->getSession();
+        $session->set('sitewidget.sms.' . $requestId, [
+            'phone' => $phone,
+            'codeHash' => hash_hmac('sha256', $code, Factory::getConfig()->get('secret')),
+            'attempts' => 0,
+            'expiresAt' => time() + 300,
+        ]);
+
+        try {
+            $this->queueSmsCode(
+                $requestId,
+                $phone,
+                'Код подтверждения ' . Factory::getConfig()->get('sitename') . ': ' . $code,
+                new \DateTimeImmutable('+5 minutes'),
+            );
+        } catch (\Throwable $exception) {
+            $session->remove('sitewidget.sms.' . $requestId);
+            throw $exception;
+        }
+
+        return ['requestId' => $requestId, 'expiresIn' => 300];
+    }
+
+    public function verifySmsCode(string $requestId, string $code): array
+    {
+        $session = Factory::getApplication()->getSession();
+        $key = 'sitewidget.sms.' . $requestId;
+        $data = $session->get($key);
+        if (!is_array($data) || (int)($data['expiresAt'] ?? 0) < time()) {
+            $session->remove($key);
+            throw new \RuntimeException('Код истёк или не найден');
+        }
+
+        $attempts = (int)($data['attempts'] ?? 0) + 1;
+        if ($attempts > 5) {
+            $session->remove($key);
+            throw new \RuntimeException('Превышено число попыток');
+        }
+        $actualHash = hash_hmac('sha256', $code, Factory::getConfig()->get('secret'));
+        if (!hash_equals((string)$data['codeHash'], $actualHash)) {
+            $data['attempts'] = $attempts;
+            $session->set($key, $data);
+            throw new \InvalidArgumentException('Неверный код');
+        }
+
+        $session->remove($key);
+        return ['verified' => true, 'phone' => (string)$data['phone']];
+    }
+
+    private function normalizePhone(string $phone): ?string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if (strlen($digits) === 11 && str_starts_with($digits, '8')) {
+            $digits = '7' . substr($digits, 1);
+        }
+        return strlen($digits) >= 10 && strlen($digits) <= 15 ? '+' . $digits : null;
+    }
+
     private function userContext(): array
     {
         $context = [
@@ -79,7 +180,7 @@ JS;
             $context['id'] = (int)$user->id;
         }
 
-        if ((int)$this->params->get('send_roles', 1) === 1) {
+        if ((int)$this->params->get('send_roles', 0) === 1) {
             $context['role'] = array_values(array_map('intval', (array)$user->groups));
         }
 

@@ -3,7 +3,7 @@
  * Plugin Name: SiteWidget
  * Plugin URI: https://sitewidget.ru
  * Description: Adds SiteWidget assistant script to the site.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: SiteWidget
@@ -59,6 +59,7 @@ final class SiteWidgetPlugin
             'send_roles' => !empty($value['send_roles']) ? 1 : 0,
             'send_email' => !empty($value['send_email']) ? 1 : 0,
             'send_name' => !empty($value['send_name']) ? 1 : 0,
+            'sms_api_token' => sanitize_text_field((string)($value['sms_api_token'] ?? '')),
         ];
     }
 
@@ -89,10 +90,29 @@ final class SiteWidgetPlugin
                             >
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row"><label for="sitewidget_sms_api_token">SMS API-токен</label></th>
+                        <td>
+                            <input
+                                name="<?= esc_attr(self::OPTION_NAME) ?>[sms_api_token]"
+                                id="sitewidget_sms_api_token"
+                                type="password"
+                                value="<?= esc_attr((string)$options['sms_api_token']) ?>"
+                                class="regular-text"
+                                autocomplete="new-password"
+                            >
+                            <p class="description">Серверный токен из раздела SiteWidget «SMS-коды». Не передаётся в браузер.</p>
+                        </td>
+                    </tr>
                     <?php self::renderCheckbox($options, 'send_user_id', 'Передавать ID пользователя'); ?>
-                    <?php self::renderCheckbox($options, 'send_roles', 'Передавать ID ролей пользователя'); ?>
                     <?php self::renderCheckbox($options, 'send_email', 'Передавать email'); ?>
                     <?php self::renderCheckbox($options, 'send_name', 'Передавать имя'); ?>
+                    <?php self::renderCheckbox(
+                        $options,
+                        'send_roles',
+                        'Передавать ID ролей пользователя',
+                        'Роли нужны для дополнительной фильтрации контента модулей виджета и доступны в платных тарифах.'
+                    ); ?>
                 </table>
                 <?php submit_button('Сохранить'); ?>
             </form>
@@ -100,7 +120,7 @@ final class SiteWidgetPlugin
         <?php
     }
 
-    private static function renderCheckbox(array $options, string $key, string $label): void
+    private static function renderCheckbox(array $options, string $key, string $label, string $description = ''): void
     {
         ?>
         <tr>
@@ -115,6 +135,9 @@ final class SiteWidgetPlugin
                     >
                     Включить
                 </label>
+                <?php if ($description !== ''): ?>
+                    <p class="description"><?= esc_html($description) ?></p>
+                <?php endif; ?>
             </td>
         </tr>
         <?php
@@ -148,6 +171,121 @@ final class SiteWidgetPlugin
             })();
         </script>
         <?php
+    }
+
+    /**
+     * @return array<string, mixed>|\WP_Error
+     */
+    public static function queueSmsCode(string $requestId, string $phone, string $text, ?\DateTimeInterface $expiresAt = null)
+    {
+        $token = trim((string)self::options()['sms_api_token']);
+        if ($token === '') {
+            return new \WP_Error('sitewidget_sms_not_configured', 'SMS API-токен SiteWidget не настроен');
+        }
+
+        $response = wp_remote_post('https://sitewidget.ru/api/sms/v1/tasks', [
+            'timeout' => 5,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ],
+            'body' => wp_json_encode([
+                'requestId' => $requestId,
+                'phone' => $phone,
+                'text' => $text,
+                'expiresAt' => ($expiresAt ?? new \DateTimeImmutable('+5 minutes'))->format(DATE_ATOM),
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $status = (int)wp_remote_retrieve_response_code($response);
+        $data = json_decode((string)wp_remote_retrieve_body($response), true);
+        if ($status < 200 || $status >= 300 || !is_array($data)) {
+            return new \WP_Error(
+                'sitewidget_sms_request_failed',
+                is_array($data) ? (string)($data['message'] ?? 'SiteWidget не принял SMS-задание') : 'SiteWidget вернул некорректный ответ',
+                ['status' => $status]
+            );
+        }
+
+        return $data;
+    }
+
+    /**
+     * @return array{requestId:string,expiresIn:int}|\WP_Error
+     */
+    public static function requestSmsCode(string $phone)
+    {
+        $phone = self::normalizePhone($phone);
+        if ($phone === null) {
+            return new \WP_Error('sitewidget_sms_invalid_phone', 'Некорректный номер телефона');
+        }
+
+        $requestId = wp_generate_uuid4();
+        $code = (string)random_int(1000, 9999);
+        $storageKey = 'sitewidget_sms_' . str_replace('-', '_', $requestId);
+        set_transient($storageKey, [
+            'phone' => $phone,
+            'code_hash' => hash_hmac('sha256', $code, wp_salt('auth')),
+            'attempts' => 0,
+        ], 5 * MINUTE_IN_SECONDS);
+
+        $result = self::queueSmsCode(
+            $requestId,
+            $phone,
+            sprintf('Код подтверждения %s: %s', wp_specialchars_decode(get_bloginfo('name')), $code),
+            new \DateTimeImmutable('+5 minutes')
+        );
+        if (is_wp_error($result)) {
+            delete_transient($storageKey);
+            return $result;
+        }
+
+        return ['requestId' => $requestId, 'expiresIn' => 300];
+    }
+
+    /**
+     * @return array{verified:bool,phone:string}|\WP_Error
+     */
+    public static function verifySmsCode(string $requestId, string $code)
+    {
+        if (!preg_match('/^[a-f0-9-]{36}$/i', $requestId) || !preg_match('/^\d{4}$/', $code)) {
+            return new \WP_Error('sitewidget_sms_invalid_code', 'Некорректный код');
+        }
+
+        $storageKey = 'sitewidget_sms_' . str_replace('-', '_', $requestId);
+        $data = get_transient($storageKey);
+        if (!is_array($data)) {
+            return new \WP_Error('sitewidget_sms_expired', 'Код истёк или не найден');
+        }
+        $attempts = (int)($data['attempts'] ?? 0) + 1;
+        if ($attempts > 5) {
+            delete_transient($storageKey);
+            return new \WP_Error('sitewidget_sms_attempts', 'Превышено число попыток');
+        }
+
+        if (!hash_equals((string)$data['code_hash'], hash_hmac('sha256', $code, wp_salt('auth')))) {
+            $data['attempts'] = $attempts;
+            set_transient($storageKey, $data, 5 * MINUTE_IN_SECONDS);
+            return new \WP_Error('sitewidget_sms_wrong_code', 'Неверный код');
+        }
+
+        delete_transient($storageKey);
+        $phone = (string)$data['phone'];
+        do_action('sitewidget_sms_verified', $phone, $requestId);
+        return ['verified' => true, 'phone' => $phone];
+    }
+
+    private static function normalizePhone(string $phone): ?string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if (strlen($digits) === 11 && str_starts_with($digits, '8')) {
+            $digits = '7' . substr($digits, 1);
+        }
+        return strlen($digits) >= 10 && strlen($digits) <= 15 ? '+' . $digits : null;
     }
 
     private static function userContext(array $options): array
@@ -195,11 +333,36 @@ final class SiteWidgetPlugin
         return [
             'public_key' => 0,
             'send_user_id' => 1,
-            'send_roles' => 1,
+            'send_roles' => 0,
             'send_email' => 1,
             'send_name' => 1,
+            'sms_api_token' => '',
         ];
     }
 }
 
 SiteWidgetPlugin::boot();
+
+if (!function_exists('sitewidget_queue_sms_code')) {
+    /**
+     * @return array<string, mixed>|\WP_Error
+     */
+    function sitewidget_queue_sms_code(string $requestId, string $phone, string $text, ?\DateTimeInterface $expiresAt = null)
+    {
+        return SiteWidgetPlugin::queueSmsCode($requestId, $phone, $text, $expiresAt);
+    }
+}
+
+if (!function_exists('sitewidget_request_sms_code')) {
+    function sitewidget_request_sms_code(string $phone)
+    {
+        return SiteWidgetPlugin::requestSmsCode($phone);
+    }
+}
+
+if (!function_exists('sitewidget_verify_sms_code')) {
+    function sitewidget_verify_sms_code(string $requestId, string $code)
+    {
+        return SiteWidgetPlugin::verifySmsCode($requestId, $code);
+    }
+}

@@ -32,7 +32,7 @@ OpenCart 3 пока не заявляем как поддерживаемый. �
 
 ### WordPress
 
-1. Собрать архив `dist/sitewidget-wordpress-0.1.0.zip`.
+1. Собрать архив `dist/sitewidget-wordpress-0.2.0.zip`.
 2. В админке WordPress открыть `Плагины -> Добавить новый -> Загрузить плагин`.
 3. Загрузить архив и активировать плагин `SiteWidget`.
 4. Открыть `Настройки -> SiteWidget`.
@@ -40,7 +40,7 @@ OpenCart 3 пока не заявляем как поддерживаемый. �
 
 ### Joomla
 
-1. Собрать архив `dist/sitewidget-joomla-system-0.1.0.zip`.
+1. Собрать архив `dist/sitewidget-joomla-system-0.2.0.zip`.
 2. В админке Joomla открыть `System -> Extensions -> Install Extensions`.
 3. Загрузить архив.
 4. Открыть список плагинов и найти `System - SiteWidget`.
@@ -48,7 +48,7 @@ OpenCart 3 пока не заявляем как поддерживаемый. �
 
 ### OpenCart
 
-1. Собрать архив `dist/sitewidget-opencart-0.1.0.ocmod.zip`.
+1. Собрать архив `dist/sitewidget-opencart-0.2.0.ocmod.zip`.
 2. В админке OpenCart открыть `Extensions -> Installer`.
 3. Загрузить `.ocmod.zip` архив.
 4. Открыть `Extensions -> Extensions`, выбрать тип `Modules`.
@@ -67,6 +67,16 @@ OpenCart 3 пока не заявляем как поддерживаемый. �
 - имя.
 
 Эти поля включаются отдельными настройками модуля.
+
+## Подтверждение телефона при регистрации
+
+В версии 0.2.0 модули хранят SMS API-токен только на сервере и содержат методы запроса и проверки одноразового кода. Код действует 5 минут, в хранилище остаётся только HMAC-хеш, число попыток проверки ограничено.
+
+- WordPress: `sitewidget_request_sms_code($phone)` и `sitewidget_verify_sms_code($requestId, $code)`.
+- Joomla: методы `requestSmsCode()` и `verifySmsCode()` system plugin.
+- OpenCart: модель `extension/sitewidget/sms_delivery` с методами `requestCode()` и `verifyCode()`.
+
+После успешной проверки регистрационный обработчик CMS сохраняет подтверждённый телефон пользователя. При последующих входах повторный SMS-код не нужен.
 
 ## Особенности CMS
 
