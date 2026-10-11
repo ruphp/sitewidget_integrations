@@ -6,6 +6,7 @@ use Joomla\CMS\Application\CMSApplicationInterface;
 use Joomla\CMS\Factory;
 use Joomla\CMS\Http\HttpFactory;
 use Joomla\CMS\Plugin\CMSPlugin;
+use Joomla\CMS\Session\Session;
 use Joomla\Event\SubscriberInterface;
 
 defined('_JEXEC') or die;
@@ -16,10 +17,16 @@ final class SiteWidget extends CMSPlugin implements SubscriberInterface
 
     private CMSApplicationInterface $siteApp;
 
+    private ?string $pendingVerificationToken = null;
+
     public static function getSubscribedEvents(): array
     {
         return [
             'onBeforeCompileHead' => 'onBeforeCompileHead',
+            'onContentPrepareForm' => 'onContentPrepareForm',
+            'onAjaxSitewidgetSms' => 'onAjaxSitewidgetSms',
+            'onUserBeforeSave' => 'onUserBeforeSave',
+            'onUserAfterSave' => 'onUserAfterSave',
         ];
     }
 
@@ -150,7 +157,139 @@ JS;
         }
 
         $session->remove($key);
-        return ['verified' => true, 'phone' => (string)$data['phone']];
+        $verificationToken = bin2hex(random_bytes(32));
+        $session->set('sitewidget.sms.grant.' . hash('sha256', $verificationToken), [
+            'phone' => (string)$data['phone'],
+            'expiresAt' => time() + 600,
+        ]);
+
+        return [
+            'verified' => true,
+            'phone' => (string)$data['phone'],
+            'verificationToken' => $verificationToken,
+        ];
+    }
+
+    public function onContentPrepareForm(object $event): void
+    {
+        if (!$this->smsRegistrationEnabled()) {
+            return;
+        }
+
+        $form = $event->getArgument('form') ?? $event->getArgument('subject');
+        if (!$form instanceof \Joomla\CMS\Form\Form || $form->getName() !== 'com_users.registration') {
+            return;
+        }
+
+        $form->load(new \SimpleXMLElement(
+            '<form><fieldset name="sitewidget_sms" label="Подтверждение телефона" '
+            . 'addfieldprefix="SiteWidget\\Plugin\\System\\SiteWidget\\Field">'
+            . '<field name="sitewidget_sms" type="SmsVerification" />'
+            . '</fieldset></form>'
+        ));
+    }
+
+    public function onAjaxSitewidgetSms(object $event): void
+    {
+        if (!$this->smsRegistrationEnabled()) {
+            throw new \RuntimeException('Подтверждение телефона отключено', 403);
+        }
+        if (!Session::checkToken('post')) {
+            throw new \RuntimeException('Обновите страницу и попробуйте ещё раз', 403);
+        }
+
+        $input = $this->siteApp->getInput();
+        $action = $input->post->getCmd('smsAction');
+        if ($action === 'request') {
+            $this->assertRequestRateLimit();
+            $result = $this->requestSmsCode($input->post->getString('phone'));
+        } elseif ($action === 'verify') {
+            $result = $this->verifySmsCode(
+                $input->post->getString('requestId'),
+                $input->post->getString('code')
+            );
+        } else {
+            throw new \InvalidArgumentException('Неизвестное действие', 422);
+        }
+
+        if (method_exists($event, 'addResult')) {
+            $event->addResult($result);
+        } else {
+            $event->setArgument('result', array_merge((array)$event->getArgument('result', []), [$result]));
+        }
+    }
+
+    public function onUserBeforeSave(object $event): void
+    {
+        if (!$this->smsRegistrationEnabled() || !$this->siteApp->isClient('site')) {
+            return;
+        }
+
+        $isNew = (bool)$event->getArgument('isNew', false);
+        $input = $this->siteApp->getInput();
+        if (!$isNew || $input->getCmd('option') !== 'com_users' || $input->getCmd('task') !== 'registration.register') {
+            return;
+        }
+
+        $formData = $input->post->get('jform', [], 'array');
+        $phone = (string)($formData['sitewidget_phone'] ?? '');
+        $token = (string)($formData['sitewidget_phone_verification'] ?? '');
+        if (!$this->validVerificationGrant($phone, $token)) {
+            throw new \RuntimeException('Подтвердите номер телефона кодом из SMS');
+        }
+
+        $this->pendingVerificationToken = $token;
+    }
+
+    public function onUserAfterSave(object $event): void
+    {
+        if ($this->pendingVerificationToken === null || !(bool)$event->getArgument('savingResult', false)) {
+            return;
+        }
+
+        Factory::getApplication()->getSession()->remove(
+            'sitewidget.sms.grant.' . hash('sha256', $this->pendingVerificationToken)
+        );
+        $this->pendingVerificationToken = null;
+    }
+
+    private function smsRegistrationEnabled(): bool
+    {
+        return (int)$this->params->get('sms_registration_enabled', 0) === 1
+            && trim((string)$this->params->get('sms_api_token', '')) !== '';
+    }
+
+    private function validVerificationGrant(string $phone, string $token): bool
+    {
+        $phone = $this->normalizePhone($phone);
+        if ($phone === null || $token === '') {
+            return false;
+        }
+
+        $session = Factory::getApplication()->getSession();
+        $key = 'sitewidget.sms.grant.' . hash('sha256', $token);
+        $grant = $session->get($key);
+        if (!is_array($grant) || (int)($grant['expiresAt'] ?? 0) < time()) {
+            $session->remove($key);
+            return false;
+        }
+
+        return hash_equals((string)($grant['phone'] ?? ''), $phone);
+    }
+
+    private function assertRequestRateLimit(): void
+    {
+        $session = Factory::getApplication()->getSession();
+        $requests = $session->get('sitewidget.sms.requests', []);
+        $requests = is_array($requests)
+            ? array_values(array_filter($requests, static fn($time): bool => (int)$time > time() - 600))
+            : [];
+        if (count($requests) >= 5) {
+            throw new \RuntimeException('Слишком много запросов. Попробуйте позже.', 429);
+        }
+
+        $requests[] = time();
+        $session->set('sitewidget.sms.requests', $requests);
     }
 
     private function normalizePhone(string $phone): ?string

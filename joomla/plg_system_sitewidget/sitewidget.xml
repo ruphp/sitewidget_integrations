@@ -7,7 +7,7 @@
     <license>GPL-2.0-or-later</license>
     <authorEmail>sitewidget@ya.ru</authorEmail>
     <authorUrl>https://sitewidget.ru</authorUrl>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <description>SiteWidget assistant integration.</description>
     <namespace path="src">SiteWidget\Plugin\System\SiteWidget</namespace>
     <files>
@@ -41,6 +41,16 @@
                     description="Серверный токен из раздела SiteWidget «SMS-коды». Не передаётся в браузер."
                     filter="raw"
                 />
+                <field
+                    name="sms_registration_enabled"
+                    type="radio"
+                    label="Подтверждать телефон при регистрации"
+                    description="Добавляет проверку SMS-кода в стандартную форму регистрации Joomla."
+                    default="0"
+                    layout="joomla.form.field.radio.switcher">
+                    <option value="0">JNO</option>
+                    <option value="1">JYES</option>
+                </field>
                 <field
                     name="send_roles"
                     type="radio"

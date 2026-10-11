@@ -3,7 +3,7 @@
  * Plugin Name: SiteWidget
  * Plugin URI: https://sitewidget.ru
  * Description: Adds SiteWidget assistant script to the site.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: SiteWidget
@@ -24,6 +24,10 @@ final class SiteWidgetPlugin
         add_action('admin_menu', [self::class, 'registerSettingsPage']);
         add_action('admin_init', [self::class, 'registerSettings']);
         add_action('wp_footer', [self::class, 'renderWidgetScript'], 100);
+        add_action('rest_api_init', [self::class, 'registerSmsRoutes']);
+        add_action('register_form', [self::class, 'renderRegistrationPhoneVerification']);
+        add_filter('registration_errors', [self::class, 'validateRegistrationPhone'], 10, 3);
+        add_action('user_register', [self::class, 'saveVerifiedRegistrationPhone']);
     }
 
     public static function registerSettingsPage(): void
@@ -60,6 +64,7 @@ final class SiteWidgetPlugin
             'send_email' => !empty($value['send_email']) ? 1 : 0,
             'send_name' => !empty($value['send_name']) ? 1 : 0,
             'sms_api_token' => sanitize_text_field((string)($value['sms_api_token'] ?? '')),
+            'sms_registration_enabled' => !empty($value['sms_registration_enabled']) ? 1 : 0,
         ];
     }
 
@@ -104,6 +109,12 @@ final class SiteWidgetPlugin
                             <p class="description">Серверный токен из раздела SiteWidget «SMS-коды». Не передаётся в браузер.</p>
                         </td>
                     </tr>
+                    <?php self::renderCheckbox(
+                        $options,
+                        'sms_registration_enabled',
+                        'Подтверждать телефон при регистрации',
+                        'Добавляет поле телефона и проверку SMS-кода в стандартную форму регистрации WordPress.'
+                    ); ?>
                     <?php self::renderCheckbox($options, 'send_user_id', 'Передавать ID пользователя'); ?>
                     <?php self::renderCheckbox($options, 'send_email', 'Передавать email'); ?>
                     <?php self::renderCheckbox($options, 'send_name', 'Передавать имя'); ?>
@@ -171,6 +182,200 @@ final class SiteWidgetPlugin
             })();
         </script>
         <?php
+    }
+
+    public static function registerSmsRoutes(): void
+    {
+        register_rest_route('sitewidget/v1', '/sms/request', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'requestRegistrationSms'],
+            'permission_callback' => '__return_true',
+        ]);
+        register_rest_route('sitewidget/v1', '/sms/verify', [
+            'methods' => 'POST',
+            'callback' => [self::class, 'verifyRegistrationSms'],
+            'permission_callback' => '__return_true',
+        ]);
+    }
+
+    public static function requestRegistrationSms(\WP_REST_Request $request)
+    {
+        if (!self::smsRegistrationEnabled()) {
+            return new \WP_Error('sitewidget_sms_disabled', 'Подтверждение телефона отключено', ['status' => 403]);
+        }
+        if (!wp_verify_nonce((string)$request->get_param('nonce'), 'sitewidget_sms_registration')) {
+            return new \WP_Error('sitewidget_sms_nonce', 'Обновите страницу и попробуйте ещё раз', ['status' => 403]);
+        }
+
+        $rateLimit = self::checkRegistrationRateLimit();
+        if (is_wp_error($rateLimit)) {
+            return $rateLimit;
+        }
+
+        $result = self::requestSmsCode((string)$request->get_param('phone'));
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        return rest_ensure_response($result);
+    }
+
+    public static function verifyRegistrationSms(\WP_REST_Request $request)
+    {
+        if (!self::smsRegistrationEnabled()) {
+            return new \WP_Error('sitewidget_sms_disabled', 'Подтверждение телефона отключено', ['status' => 403]);
+        }
+        if (!wp_verify_nonce((string)$request->get_param('nonce'), 'sitewidget_sms_registration')) {
+            return new \WP_Error('sitewidget_sms_nonce', 'Обновите страницу и попробуйте ещё раз', ['status' => 403]);
+        }
+
+        $result = self::verifySmsCode(
+            sanitize_text_field((string)$request->get_param('requestId')),
+            sanitize_text_field((string)$request->get_param('code'))
+        );
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        return rest_ensure_response($result);
+    }
+
+    public static function renderRegistrationPhoneVerification(): void
+    {
+        if (!self::smsRegistrationEnabled()) {
+            return;
+        }
+
+        $phone = isset($_POST['sitewidget_phone'])
+            ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone']))
+            : '';
+        $verificationToken = isset($_POST['sitewidget_phone_verification'])
+            ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone_verification']))
+            : '';
+        $alreadyVerified = self::validVerificationGrant($phone, $verificationToken);
+        $requestUrl = rest_url('sitewidget/v1/sms/request');
+        $verifyUrl = rest_url('sitewidget/v1/sms/verify');
+        $nonce = wp_create_nonce('sitewidget_sms_registration');
+        ?>
+        <div id="sitewidget-phone-verification" class="sitewidget-phone-verification">
+            <p>
+                <label for="sitewidget_phone">Номер телефона<br>
+                    <input type="tel" name="sitewidget_phone" id="sitewidget_phone" class="input" value="<?= esc_attr($phone) ?>" autocomplete="tel" required<?= $alreadyVerified ? ' readonly' : '' ?>>
+                </label>
+            </p>
+            <p><button type="button" id="sitewidget_sms_request" class="button button-secondary"<?= $alreadyVerified ? ' hidden' : '' ?>>Получить код</button></p>
+            <div id="sitewidget_sms_code_wrap" hidden>
+                <p>
+                    <label for="sitewidget_sms_code">Код из SMS<br>
+                        <input type="text" id="sitewidget_sms_code" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="4">
+                    </label>
+                </p>
+                <p><button type="button" id="sitewidget_sms_verify" class="button button-secondary">Подтвердить</button></p>
+            </div>
+            <input type="hidden" name="sitewidget_phone_verification" id="sitewidget_phone_verification" value="<?= esc_attr($verificationToken) ?>">
+            <p id="sitewidget_sms_status" class="message<?= $alreadyVerified ? ' is-success' : '' ?>" aria-live="polite"><?= $alreadyVerified ? 'Телефон подтверждён.' : '' ?></p>
+        </div>
+        <style>
+            .sitewidget-phone-verification .button { width: 100%; min-height: 40px; }
+            .sitewidget-phone-verification .message { min-height: 20px; margin: 0 0 12px; color: #50575e; }
+            .sitewidget-phone-verification .message.is-error { color: #b32d2e; }
+            .sitewidget-phone-verification .message.is-success { color: #008a20; }
+        </style>
+        <script>
+        (function () {
+            var phone = document.getElementById('sitewidget_phone');
+            var requestButton = document.getElementById('sitewidget_sms_request');
+            var codeWrap = document.getElementById('sitewidget_sms_code_wrap');
+            var code = document.getElementById('sitewidget_sms_code');
+            var verifyButton = document.getElementById('sitewidget_sms_verify');
+            var token = document.getElementById('sitewidget_phone_verification');
+            var status = document.getElementById('sitewidget_sms_status');
+            var requestId = '';
+            var nonce = <?= wp_json_encode($nonce) ?>;
+
+            function setStatus(message, type) {
+                status.textContent = message || '';
+                status.className = 'message' + (type ? ' is-' + type : '');
+            }
+
+            function send(url, payload, button) {
+                button.disabled = true;
+                setStatus('Отправляем запрос...', '');
+                return fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                    credentials: 'same-origin'
+                }).then(function (response) {
+                    return response.json().then(function (data) {
+                        if (!response.ok) {
+                            throw new Error(data.message || 'Не удалось выполнить запрос');
+                        }
+                        return data;
+                    });
+                }).finally(function () {
+                    button.disabled = false;
+                });
+            }
+
+            requestButton.addEventListener('click', function () {
+                token.value = '';
+                send(<?= wp_json_encode($requestUrl) ?>, {phone: phone.value, nonce: nonce}, requestButton)
+                    .then(function (data) {
+                        requestId = data.requestId;
+                        codeWrap.hidden = false;
+                        code.focus();
+                        setStatus('Код передан на отправку. Введите его после получения SMS.', '');
+                    })
+                    .catch(function (error) { setStatus(error.message, 'error'); });
+            });
+
+            verifyButton.addEventListener('click', function () {
+                send(<?= wp_json_encode($verifyUrl) ?>, {requestId: requestId, code: code.value, nonce: nonce}, verifyButton)
+                    .then(function (data) {
+                        token.value = data.verificationToken;
+                        phone.readOnly = true;
+                        requestButton.hidden = true;
+                        codeWrap.hidden = true;
+                        setStatus('Телефон подтверждён.', 'success');
+                    })
+                    .catch(function (error) { setStatus(error.message, 'error'); });
+            });
+        })();
+        </script>
+        <?php
+    }
+
+    public static function validateRegistrationPhone(\WP_Error $errors, string $sanitizedUserLogin, string $userEmail): \WP_Error
+    {
+        if (!self::smsRegistrationEnabled()) {
+            return $errors;
+        }
+
+        $phone = isset($_POST['sitewidget_phone']) ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone'])) : '';
+        $token = isset($_POST['sitewidget_phone_verification']) ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone_verification'])) : '';
+        if (!self::validVerificationGrant($phone, $token)) {
+            $errors->add('sitewidget_phone_unverified', 'Подтвердите номер телефона кодом из SMS.');
+        }
+
+        return $errors;
+    }
+
+    public static function saveVerifiedRegistrationPhone(int $userId): void
+    {
+        if (!self::smsRegistrationEnabled()) {
+            return;
+        }
+
+        $phone = isset($_POST['sitewidget_phone']) ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone'])) : '';
+        $token = isset($_POST['sitewidget_phone_verification']) ? sanitize_text_field(wp_unslash((string)$_POST['sitewidget_phone_verification'])) : '';
+        $normalizedPhone = self::normalizePhone($phone);
+        if ($normalizedPhone === null || !self::validVerificationGrant($normalizedPhone, $token)) {
+            return;
+        }
+
+        update_user_meta($userId, 'sitewidget_verified_phone', $normalizedPhone);
+        delete_transient(self::verificationGrantKey($token));
     }
 
     /**
@@ -248,7 +453,7 @@ final class SiteWidgetPlugin
     }
 
     /**
-     * @return array{verified:bool,phone:string}|\WP_Error
+     * @return array{verified:bool,phone:string,verificationToken:string}|\WP_Error
      */
     public static function verifySmsCode(string $requestId, string $code)
     {
@@ -275,8 +480,47 @@ final class SiteWidgetPlugin
 
         delete_transient($storageKey);
         $phone = (string)$data['phone'];
+        $verificationToken = wp_generate_password(48, false, false);
+        set_transient(self::verificationGrantKey($verificationToken), ['phone' => $phone], 10 * MINUTE_IN_SECONDS);
         do_action('sitewidget_sms_verified', $phone, $requestId);
-        return ['verified' => true, 'phone' => $phone];
+        return ['verified' => true, 'phone' => $phone, 'verificationToken' => $verificationToken];
+    }
+
+    private static function smsRegistrationEnabled(): bool
+    {
+        $options = self::options();
+        return !empty($options['sms_registration_enabled']) && trim((string)$options['sms_api_token']) !== '';
+    }
+
+    private static function validVerificationGrant(string $phone, string $token): bool
+    {
+        $normalizedPhone = self::normalizePhone($phone);
+        if ($normalizedPhone === null || $token === '') {
+            return false;
+        }
+
+        $grant = get_transient(self::verificationGrantKey($token));
+        return is_array($grant) && hash_equals((string)($grant['phone'] ?? ''), $normalizedPhone);
+    }
+
+    private static function verificationGrantKey(string $token): string
+    {
+        return 'sitewidget_sms_grant_' . hash('sha256', $token);
+    }
+
+    private static function checkRegistrationRateLimit()
+    {
+        $remoteAddress = sanitize_text_field((string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+        $key = 'sitewidget_sms_rate_' . hash('sha256', $remoteAddress);
+        $requests = get_transient($key);
+        $requests = is_array($requests) ? array_values(array_filter($requests, static fn($time): bool => (int)$time > time() - 600)) : [];
+        if (count($requests) >= 5) {
+            return new \WP_Error('sitewidget_sms_rate_limit', 'Слишком много запросов. Попробуйте позже.', ['status' => 429]);
+        }
+        $requests[] = time();
+        set_transient($key, $requests, 10 * MINUTE_IN_SECONDS);
+
+        return true;
     }
 
     private static function normalizePhone(string $phone): ?string
@@ -337,6 +581,7 @@ final class SiteWidgetPlugin
             'send_email' => 1,
             'send_name' => 1,
             'sms_api_token' => '',
+            'sms_registration_enabled' => 0,
         ];
     }
 }

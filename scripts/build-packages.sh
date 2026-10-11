@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/dist"
 TMP="$DIST/tmp"
+VERSION="0.3.0"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 is required" >&2
@@ -20,7 +21,7 @@ copy_clean() {
 
 copy_clean
 cp -R "$ROOT/wordpress/sitewidget" "$TMP/sitewidget"
-python3 - "$TMP" "$DIST/sitewidget-wordpress-0.2.0.zip" <<'PY'
+python3 - "$TMP" "$DIST/sitewidget-wordpress-$VERSION.zip" <<'PY'
 import os
 import sys
 import zipfile
@@ -35,7 +36,7 @@ PY
 
 copy_clean
 cp -R "$ROOT/joomla/plg_system_sitewidget/"* "$TMP/"
-python3 - "$TMP" "$DIST/sitewidget-joomla-system-0.2.0.zip" <<'PY'
+python3 - "$TMP" "$DIST/sitewidget-joomla-system-$VERSION.zip" <<'PY'
 import os
 import sys
 import zipfile
@@ -53,7 +54,8 @@ mkdir -p "$TMP/upload/extension/sitewidget"
 cp "$ROOT/opencart/sitewidget/install.json" "$TMP/install.json"
 cp -R "$ROOT/opencart/sitewidget/admin" "$TMP/upload/extension/sitewidget/admin"
 cp -R "$ROOT/opencart/sitewidget/catalog" "$TMP/upload/extension/sitewidget/catalog"
-python3 - "$TMP" "$DIST/sitewidget-opencart-0.2.0.ocmod.zip" <<'PY'
+cp -R "$ROOT/opencart/sitewidget/ocmod" "$TMP/ocmod"
+python3 - "$TMP" "$DIST/sitewidget-opencart-$VERSION.ocmod.zip" <<'PY'
 import os
 import sys
 import zipfile
