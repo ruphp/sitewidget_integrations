@@ -56,7 +56,41 @@ final class SmsDelivery extends \Opencart\System\Engine\Model
         }
 
         unset($this->session->data['sitewidget_sms'][$requestId]);
-        return ['verified' => true, 'phone' => (string)$data['phone']];
+        $verificationToken = bin2hex(random_bytes(32));
+        $this->session->data['sitewidget_sms_grants'][hash('sha256', $verificationToken)] = [
+            'phone' => (string)$data['phone'],
+            'expiresAt' => time() + 600,
+        ];
+
+        return [
+            'verified' => true,
+            'phone' => (string)$data['phone'],
+            'verificationToken' => $verificationToken,
+        ];
+    }
+
+    public function validateGrant(string $phone, string $token): bool
+    {
+        $phone = $this->normalizePhone($phone);
+        if ($phone === null || $token === '') {
+            return false;
+        }
+
+        $key = hash('sha256', $token);
+        $grant = $this->session->data['sitewidget_sms_grants'][$key] ?? null;
+        if (!is_array($grant) || (int)($grant['expiresAt'] ?? 0) < time()) {
+            unset($this->session->data['sitewidget_sms_grants'][$key]);
+            return false;
+        }
+
+        return hash_equals((string)($grant['phone'] ?? ''), $phone);
+    }
+
+    public function consumeGrant(string $token): void
+    {
+        if ($token !== '') {
+            unset($this->session->data['sitewidget_sms_grants'][hash('sha256', $token)]);
+        }
     }
 
     public function queue(string $requestId, string $phone, string $text, ?\DateTimeInterface $expiresAt = null): array

@@ -38,6 +38,7 @@ final class SiteWidget extends \Opencart\System\Engine\Controller
             'module_sitewidget_status',
             'module_sitewidget_public_key',
             'module_sitewidget_sms_api_token',
+            'module_sitewidget_sms_registration_enabled',
             'module_sitewidget_send_user_id',
             'module_sitewidget_send_roles',
             'module_sitewidget_send_email',
@@ -49,16 +50,19 @@ final class SiteWidget extends \Opencart\System\Engine\Controller
         }
 
         $data['module_sitewidget_send_user_id'] = $data['module_sitewidget_send_user_id'] ?? 1;
+        $data['module_sitewidget_sms_registration_enabled'] = $data['module_sitewidget_sms_registration_enabled'] ?? 0;
         $data['module_sitewidget_send_roles'] = $data['module_sitewidget_send_roles'] ?? 0;
         $data['module_sitewidget_send_email'] = $data['module_sitewidget_send_email'] ?? 1;
         $data['module_sitewidget_send_name'] = $data['module_sitewidget_send_name'] ?? 1;
         $data['sitewidget_switches'] = [
+            'module_sitewidget_sms_registration_enabled' => $this->language->get('entry_sms_registration_enabled'),
             'module_sitewidget_send_user_id' => $this->language->get('entry_send_user_id'),
             'module_sitewidget_send_roles' => $this->language->get('entry_send_roles'),
             'module_sitewidget_send_email' => $this->language->get('entry_send_email'),
             'module_sitewidget_send_name' => $this->language->get('entry_send_name'),
         ];
         $data['sitewidget_switch_help'] = [
+            'module_sitewidget_sms_registration_enabled' => $this->language->get('help_sms_registration_enabled'),
             'module_sitewidget_send_roles' => $this->language->get('help_send_roles'),
         ];
 
